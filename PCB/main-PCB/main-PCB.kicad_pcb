@@ -104,10 +104,10 @@
 			(layerselection 0x00000000_00000000_55555555_5755f5ff)
 			(plot_on_all_layers_selection 0x00000000_00000000_00000000_00000000)
 			(disableapertmacros no)
-			(usegerberextensions no)
+			(usegerberextensions yes)
 			(usegerberattributes yes)
 			(usegerberadvancedattributes yes)
-			(creategerberjobfile yes)
+			(creategerberjobfile no)
 			(dashed_line_dash_ratio 12.000000)
 			(dashed_line_gap_ratio 3.000000)
 			(svgprecision 4)
@@ -135,9 +135,9 @@
 			(subtractmaskfromsilk no)
 			(outputformat 1)
 			(mirror no)
-			(drillshape 1)
+			(drillshape 0)
 			(scaleselection 1)
-			(outputdirectory "")
+			(outputdirectory "main-PCB-gerbers/")
 		)
 	)
 	(net 0 "")
@@ -1138,7 +1138,7 @@
 		(descr "DFN package size 1006 3 pins")
 		(tags "DFN package size 1006 3 pins")
 		(property "Reference" "Q1"
-			(at 0 -1.6 225)
+			(at 0 -1.6 45)
 			(layer "F.SilkS")
 			(hide yes)
 			(uuid "3baf57ab-8175-42ec-8d06-32cc5ca23a8f")
@@ -1150,7 +1150,7 @@
 			)
 		)
 		(property "Value" "Q_NMOS_GSD"
-			(at 0 1.6 225)
+			(at 0 1.6 45)
 			(layer "F.Fab")
 			(hide yes)
 			(uuid "aeff151d-a7b6-4ab2-bdf6-848e70d14f75")
@@ -1363,6 +1363,17 @@
 			)
 			(rotate
 				(xyz 0 0 0)
+			)
+		)
+		(model "${MY_3D_MODEL_DIR}/transistors/DFN1006-3.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz -0 -0 180)
 			)
 		)
 	)

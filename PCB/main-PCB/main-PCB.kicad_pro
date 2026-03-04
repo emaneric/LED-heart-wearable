@@ -518,10 +518,10 @@
       "gencad": "",
       "idf": "",
       "netlist": "",
-      "plot": "",
+      "plot": "main-PCB-gerbers/",
       "pos_files": "",
       "specctra_dsn": "",
-      "step": "",
+      "step": "main-PCB.step",
       "svg": "",
       "vrml": ""
     },
