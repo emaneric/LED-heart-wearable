@@ -33,7 +33,9 @@ enable_language(C ASM)
 
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
-    Core/Src/LIS2DU12.c)
+    Core/Src/LIS2DU12.c
+    Drivers/SEGGER_RTT/SEGGER_RTT.c
+    Core/Src/retarget.c)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -50,7 +52,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    # Add user defined include paths
+    Drivers/SEGGER_RTT
 )
 
 # Add project symbols (macros)
