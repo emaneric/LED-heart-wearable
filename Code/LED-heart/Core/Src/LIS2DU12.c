@@ -3,12 +3,14 @@
 #include "stm32u0xx_hal_gpio.h"
 #include "stm32u0xx_hal_spi.h"
 #include <stdio.h>
+#include <string.h>
 
 #define SPI_READ_BIT(reg)  ((reg) | 0x80)
 #define SPI_WRITE_BIT(reg)  ((reg) & 0x7F)
 #define SPI_TIMEOUT 1000
 
 typedef enum {
+    LIS2DU12_REG_CTRL1       = 0x10,
     LIS2DU12_REG_CTRL2       = 0x11,
     LIS2DU12_REG_CTRL5       = 0x14,
     LIS2DU12_REG_FIFO_CTRL   = 0x15,
@@ -18,6 +20,20 @@ typedef enum {
     LIS2DU12_REG_WHO_AM_I    = 0x43,
 } LIS2DU12_RegAddr_t;
 
+
+union {
+    uint8_t raw;
+    struct {
+        uint8_t WU_Z_EN   : 1;  // bit 0
+        uint8_t WU_Y_EN   : 1;  // bit 1
+        uint8_t WU_X_EN   : 1;  // bit 2
+        uint8_t DRDY_PULSED  : 1;  // bit 3
+        uint8_t IF_ADD_INC : 1;  // bit 4
+        uint8_t SW_RESET : 1;  // bit 5
+        uint8_t SIM: 1;  // bit 6
+        uint8_t PP_OD  : 1;  // bit 7
+    } field;
+} CTRL1_reg;
 
 union {
     uint8_t raw;
@@ -111,6 +127,10 @@ uint8_t LIS2DU12_init(SPI_HandleTypeDef *hspi){
     status = LIS2DU12_read_register(hspi, LIS2DU12_REG_WHO_AM_I, &WHO_AM_I_value);
     HAL_Delay(1);
 
+    CTRL1_reg.field.IF_ADD_INC = 1;
+    status = LIS2DU12_write_register(hspi, LIS2DU12_REG_CTRL1, CTRL1_reg.raw);
+    HAL_Delay(1);
+
     //Full scale +-4g
     //25Hz normal mode
     //No samples discarded
@@ -120,7 +140,9 @@ uint8_t LIS2DU12_init(SPI_HandleTypeDef *hspi){
     status = LIS2DU12_write_register(hspi, LIS2DU12_REG_CTRL5, CTRL5_reg.raw);
     HAL_Delay(1);
 
+    //FIFO 2x depth mode (8 bit samples, no temperature in FIFO)
     //FIFO continous mode
+    FIFO_CTRL_reg.field.FIFO_DEPTH = 1;
     FIFO_CTRL_reg.field.FIFO_MODE = 0b110;
     status = LIS2DU12_write_register(hspi, LIS2DU12_REG_FIFO_CTRL, FIFO_CTRL_reg.raw);
     HAL_Delay(1);
@@ -159,6 +181,24 @@ uint8_t LIS2DU12_read_FIFO(SPI_HandleTypeDef *hspi){
     status = LIS2DU12_read_register(hspi, LIS2DU12_REG_FIFO_STATUS1, &FIFO_STATUS1_reg.raw);
     printf("FIFO watermark flag: %d\r\n", FIFO_STATUS1_reg.field.FTH);
     HAL_Delay(1);
+
+    // 3 bytes per sample in 2x depth mode (8-bit XYZ)
+    uint8_t num_samples = FIFO_STATUS2_reg.field.FSS;
+    if (num_samples == 0) return 0;
+
+    static uint8_t rx_buffer[769]; // 256 samples × 3 bytes max
+    uint16_t num_bytes = (uint16_t)num_samples * 3;
+    if (num_bytes > sizeof(rx_buffer)) num_bytes = sizeof(rx_buffer);
+    memset(rx_buffer, 0, num_bytes);
+
+    uint8_t addr = LIS2DU12_REG_FIFO_STATUS2 | 0x80;
+    uint8_t status_dummy = 0;
+    HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, 0);
+    status = HAL_SPI_TransmitReceive(hspi, &addr, &status_dummy, 1, SPI_TIMEOUT);
+    status = HAL_SPI_TransmitReceive(hspi, rx_buffer, rx_buffer, num_bytes, SPI_TIMEOUT);
+    HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, 1);
+    HAL_Delay(1);
+
 
     if (status == HAL_OK){
         return 0;
