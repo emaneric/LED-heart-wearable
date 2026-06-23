@@ -16,6 +16,15 @@
   ******************************************************************************
   */
 /* USER CODE END Header */
+
+
+/**
+To monitor RTT messages:
+Host: localhost
+Port: 19021
+*/
+
+
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
@@ -106,13 +115,26 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    LIS2DU12_read_FIFO(&hspi1);
-    HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
-    uint8_t INT1_pin_state = HAL_GPIO_ReadPin(INT1_GPIO_Port, INT1_Pin);
-    printf("INT1: %d\r\n", INT1_pin_state);
-    HAL_Delay(1000);
+    static int16_t acceleration_data[256][3];
+    static uint8_t FIFO_unread_length = 0;
 
-    
+    if (HAL_GPIO_ReadPin(INT1_GPIO_Port, INT1_Pin) == 1){
+      if (LIS2DU12_read_FIFO(&hspi1, &FIFO_unread_length, acceleration_data) == 0){
+        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
+        printf("Read %d samples from FIFO\r\n", FIFO_unread_length * 2);
+        for (uint16_t i = 0; i < FIFO_unread_length * 2; i++) {
+          printf("X=%d mg, Y=%d mg, Z=%d mg\r\n",
+          acceleration_data[i][0],
+          acceleration_data[i][1],
+          acceleration_data[i][2]);
+      }
+      }
+
+      else {
+        printf("Error reading FIFO");
+      }
+    }
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -240,6 +262,34 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+
+
+//How long of a period should movement be analysed to get movement score?
+//Rolling aveage of absolute movement?
+//5 second window?
+//Score 0 to 100%?
+//calculate_movement_score should be called to get the target score but a ramp is used to smoothly transition to the-
+//-new target from the old  target
+//maybe mcu can sleep between heart beats?
+//maybe make the acceleration_data int8 instead to save resources and only convert to mg when debugging or printing
+uint8_t calculate_movement_score(int16_t acceleration_data[256][3]){
+  return 0;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /* USER CODE END 4 */
 
