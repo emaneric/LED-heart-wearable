@@ -15,16 +15,15 @@
   *
   ******************************************************************************
   */
+
+
+// Segger RTT host: localhost
+// Segger RTT port: 19021
+
+
+
+
 /* USER CODE END Header */
-
-
-/**
-To monitor RTT messages:
-Host: localhost
-Port: 19021
-*/
-
-
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 
@@ -33,16 +32,31 @@ Port: 19021
 #include <stdio.h>
 #include "LIS2DU12.h"
 #include "stm32u0xx_hal_gpio.h"
+#include "SEGGER_RTT.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef enum {
+    SLEEP_MODE_LIGHT,
+    SLEEP_MODE_DEEP
+} SleepMode_t;
+
+typedef enum {
+    BEAT_LUB_RAMP_UP,
+    BEAT_LUB_RAMP_DOWN,
+    BEAT_GAP,
+    BEAT_DUB_RAMP_UP,
+    BEAT_DUB_RAMP_DOWN,
+    BEAT_REST
+} BeatPhase_t;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define SLEEP_TIMEOUT_MS 20000
+#define LED_PWM_MAX 249  //matches TIM2 Period (ARR)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -54,11 +68,9 @@ Port: 19021
 
 SPI_HandleTypeDef hspi1;
 
-/* USER CODE BEGIN PV */
+TIM_HandleTypeDef htim2;
 
-//The x,y,z movement data from the last 5 seconds
-//25Hz ODR, 3 channels, 5 seconds
-volatile uint8_t movement_window_buffer[375] = {0};  
+/* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
 
@@ -66,7 +78,22 @@ volatile uint8_t movement_window_buffer[375] = {0};
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
+uint8_t calculate_movement_score(int8_t acceleration_data[256][3]);
+void go_to_sleep(SleepMode_t mode); 
+void auto_sleep_tick(uint8_t movement_score);
+void led_tick(uint8_t movement_score);
+//Between heart flashes, use the stop sleep mode. To keep track of time since hal get tick wont work in stop mode, use RTC.
+//If movement score has been 0 for more than 1 minute, configure acclerometer to trigger interrupt on movement detection and then 
+//send MCU to full most deep sleep.
+//When MCU is not in deep sleep, it should wake from stop mode to read accelerometer or to flash LED, then go back to sleep. In stop mode
+//the accelermoeter data array should be stored fine. (make sure that is true)
+// MCU will stay awake durting the flash and then sleep between flashes
+//Write code to flash led
+//Use timer to PWM led intensity in a ramp pattern. Speed of ramp and time between beats is determined by movement score.
+//Maybe we can lower MCU clock speed? Would it give better power consumption or worse since it takes longer to compute things. 
+
 
 /* USER CODE END PFP */
 
@@ -89,7 +116,7 @@ int main(void)
   /* MCU Configuration--------------------------------------------------------*/
 
   /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
-  HAL_Init();
+   HAL_Init();
 
   /* USER CODE BEGIN Init */
 
@@ -105,35 +132,35 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_SPI1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   HAL_Delay(100);
   LIS2DU12_init(&hspi1);
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
   HAL_Delay(100);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+
   while (1)
   {
-    static int16_t acceleration_data[256][3];
+    static int8_t acceleration_data[256][3];
     static uint8_t FIFO_unread_length = 0;
+    static uint8_t movement_score = 0;
 
     if (HAL_GPIO_ReadPin(INT1_GPIO_Port, INT1_Pin) == 1){
       if (LIS2DU12_read_FIFO(&hspi1, &FIFO_unread_length, acceleration_data) == 0){
-        HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_3);
-        printf("Read %d samples from FIFO\r\n", FIFO_unread_length * 2);
-        for (uint16_t i = 0; i < FIFO_unread_length * 2; i++) {
-          printf("X=%d mg, Y=%d mg, Z=%d mg\r\n",
-          acceleration_data[i][0],
-          acceleration_data[i][1],
-          acceleration_data[i][2]);
+        movement_score = calculate_movement_score(acceleration_data);
       }
-      }
-
       else {
-        printf("Error reading FIFO");
+        //Error reading FIFO
       }
     }
+
+    //auto_sleep_tick(movement_score);
+    led_tick(movement_score);
+    //HAL_Delay(10);
 
     /* USER CODE END WHILE */
 
@@ -172,10 +199,10 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
-  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV4;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
   {
     Error_Handler();
   }
@@ -204,7 +231,7 @@ static void MX_SPI1_Init(void)
   hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
   hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
   hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_64;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_16;
   hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
   hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
   hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
@@ -222,6 +249,55 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief TIM2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 15;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 249;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+  HAL_TIM_MspPostInit(&htim2);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -234,27 +310,54 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET);
 
-  /*Configure GPIO pins : INT1_Pin INT2_Pin */
-  GPIO_InitStruct.Pin = INT1_Pin|INT2_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  /*Configure GPIO pins : PC14 PC15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_14|GPIO_PIN_15;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PF2 PF3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2|GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOF, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PA0 PA4 PA5 PA6
+                           PA8 PA9 PA10 PA12 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_4|GPIO_PIN_5|GPIO_PIN_6
+                          |GPIO_PIN_8|GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_12;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LED_Pin SPI_CS_Pin */
-  GPIO_InitStruct.Pin = LED_Pin|SPI_CS_Pin;
+  /*Configure GPIO pin : INT1_Pin */
+  GPIO_InitStruct.Pin = INT1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(INT1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB0 PB1 PB4 PB5
+                           PB6 PB7 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_5
+                          |GPIO_PIN_6|GPIO_PIN_7;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SPI_CS_Pin */
+  GPIO_InitStruct.Pin = SPI_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(SPI_CS_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -264,31 +367,158 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 
+#define MOVEMENT_MAX_AVG_DELTA 30
 
-//How long of a period should movement be analysed to get movement score?
-//Rolling aveage of absolute movement?
-//5 second window?
-//Score 0 to 100%?
-//calculate_movement_score should be called to get the target score but a ramp is used to smoothly transition to the-
-//-new target from the old  target
-//maybe mcu can sleep between heart beats?
-//maybe make the acceleration_data int8 instead to save resources and only convert to mg when debugging or printing
-uint8_t calculate_movement_score(int16_t acceleration_data[256][3]){
-  return 0;
+uint8_t calculate_movement_score(int8_t acceleration_data[256][3]){
+
+  uint32_t total_variation = 0;
+
+  //Sum the sample-to-sample change on each axis. Using deltas rather than raw magnitude cancels
+  //out the constant gravity offset baked into whichever axis is vertical, so the score reflects
+  //actual motion rather than orientation.
+  for (uint16_t i = 1; i < 256; i++){
+    for (uint8_t axis = 0; axis < 3; axis++){
+      int16_t delta = (int16_t)acceleration_data[i][axis] - (int16_t)acceleration_data[i - 1][axis];
+      total_variation += (delta < 0) ? -delta : delta;
+    }
+  }
+
+  uint32_t avg_delta = total_variation / (255 * 3);
+  uint32_t score = (avg_delta * 100) / MOVEMENT_MAX_AVG_DELTA;
+  if (score > 100) score = 100;
+
+  return (uint8_t)score;
 }
 
 
+void go_to_sleep(SleepMode_t mode){
+    switch (mode) {
+        case SLEEP_MODE_DEEP:
+            /* PA2 = WKUP4, wired to the accelerometer's INT2. Movement drives it high,
+               so wake on a rising edge. Clear any stale wake flag before enabling,
+               otherwise a flag left set from a previous event wakes us immediately. */
+
+            if(!LIS2DU12_configure_sleep(&hspi1)){
+              __NOP();
+            }
+            else{
+              __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF4);
+              HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN4_HIGH);
+              HAL_PWR_EnterSHUTDOWNMode();
+            }
+
+            break;
+
+        case SLEEP_MODE_LIGHT:
+
+        default:
+            /* light sleep config */
+            break;
+    }
+}
 
 
+void auto_sleep_tick(uint8_t movement_score){
 
+  static uint32_t zero_score_start_tick = 0;
+  static uint8_t zero_score_timer_active = 0;
+  
+  if (movement_score == 0){
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, 0);
+    
+    if (!zero_score_timer_active){     
+      zero_score_timer_active = 1;
+      zero_score_start_tick = HAL_GetTick();
+    }
+    
+    else if ((HAL_GetTick() - zero_score_start_tick) >= SLEEP_TIMEOUT_MS){
+      go_to_sleep(SLEEP_MODE_DEEP);
+    }
+  }
+  else {
+    zero_score_timer_active = 0;
+    HAL_GPIO_WritePin(GPIOA, GPIO_PIN_3, 1);
+  }
+}
 
+void led_tick(uint8_t movement_score){
 
+    static BeatPhase_t phase = BEAT_LUB_RAMP_UP;
+    static uint32_t phase_start_tick = 0;
+    uint32_t now = HAL_GetTick();
+    uint32_t elapsed = now - phase_start_tick;
 
+    //"Lub" is the smaller first thump, "dub" the stronger second thump, separated by a
+    //short gap, followed by a longer rest before the next heartbeat.
+    const uint32_t lub_ramp_ms = 40;
+    const uint32_t gap_ms      = 80;
+    const uint32_t dub_ramp_ms = 80;
 
+    //Rest period shortens as movement increases, mimicking a rising heart rate.
+    //Score 0 -> 2000ms rest, score 100 -> 150ms rest.
+    uint32_t rest_ms = 2000 - ((uint32_t)movement_score * 1850) / 100;
 
+    uint32_t duty = 0;
 
+    switch (phase){
+        case BEAT_LUB_RAMP_UP:
+            duty = (elapsed * (LED_PWM_MAX / 2)) / lub_ramp_ms;
+            if (elapsed >= lub_ramp_ms){
+                phase = BEAT_LUB_RAMP_DOWN;
+                phase_start_tick = now;
+                duty = LED_PWM_MAX / 2;
+            }
+            break;
 
+        case BEAT_LUB_RAMP_DOWN:
+            duty = (LED_PWM_MAX / 2) - (elapsed * (LED_PWM_MAX / 2)) / lub_ramp_ms;
+            if (elapsed >= lub_ramp_ms){
+                phase = BEAT_GAP;
+                phase_start_tick = now;
+                duty = 0;
+            }
+            break;
 
+        case BEAT_GAP:
+            duty = 0;
+            if (elapsed >= gap_ms){
+                phase = BEAT_DUB_RAMP_UP;
+                phase_start_tick = now;
+            }
+            break;
+
+        case BEAT_DUB_RAMP_UP:
+            duty = (elapsed * LED_PWM_MAX) / dub_ramp_ms;
+            if (elapsed >= dub_ramp_ms){
+                phase = BEAT_DUB_RAMP_DOWN;
+                phase_start_tick = now;
+                duty = LED_PWM_MAX;
+            }
+            break;
+
+        case BEAT_DUB_RAMP_DOWN:
+            duty = LED_PWM_MAX - (elapsed * LED_PWM_MAX) / dub_ramp_ms;
+            if (elapsed >= dub_ramp_ms){
+                phase = BEAT_REST;
+                phase_start_tick = now;
+                duty = 0;
+            }
+            break;
+
+        case BEAT_REST:
+        default:
+            duty = 0;
+            if (elapsed >= rest_ms){
+                phase = BEAT_LUB_RAMP_UP;
+                phase_start_tick = now;
+            }
+            break;
+    }
+
+    if (duty > LED_PWM_MAX) duty = LED_PWM_MAX; //clamp against rounding overshoot at phase boundaries
+
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, duty);
+}
 
 
 /* USER CODE END 4 */

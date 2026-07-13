@@ -18,6 +18,11 @@ typedef enum {
     LIS2DU12_REG_FIFO_STATUS1 = 0x26,
     LIS2DU12_REG_FIFO_STATUS2 = 0x27,
     LIS2DU12_REG_WHO_AM_I    = 0x43,
+    LIS2DU12_REG_INTERRUPT_CFG = 0x17,
+    LIS2DU12_REG_WAKE_UP_THS = 0x1C,
+    LIS2DU12_REG_WAKE_UP_DUR = 0x1D,
+    LIS2DU12_REG_MD2_CFG    = 0x20,
+    LIS2DU12_REG_WAKE_UP_SRC = 0x21,
 } LIS2DU12_RegAddr_t;
 
 
@@ -90,6 +95,67 @@ union {
         uint8_t FSS   : 8;  // bits 0-7
     } field;
 } FIFO_STATUS2_reg;
+
+union {
+    uint8_t raw;
+    struct {
+        uint8_t INTERRUPTS_ENABLE : 1;  // bit 0
+        uint8_t LIR               : 1;  // bit 1
+        uint8_t H_LACTIVE         : 1;  // bit 2
+        uint8_t SLEEP_STATUS_ON_INT : 1;  // bit 3
+        uint8_t reserved          : 1;  // bit 4
+        uint8_t WAKE_THS_W        : 1;  // bit 5
+        uint8_t INT_SHORT_EN      : 1;  // bit 6
+        uint8_t reserved2         : 1;  // bit 7
+    } field;
+} INTERRUPT_CFG_reg;
+
+union {
+    uint8_t raw;
+    struct {
+        uint8_t WK_THS : 6;  // bits 0-5
+        uint8_t SLEEP_ON : 1;  // bit 6
+        uint8_t SINGLE_DOUBLE_TAP : 1;  // bit 7
+    } field;
+} WAKE_UP_THS_reg;
+
+union {
+    uint8_t raw;
+    struct {
+        uint8_t SLEEP_DUR : 4;  // bits 0-3
+        uint8_t reserved  : 1;  // bit 4
+        uint8_t WAKE_DUR  : 2;  // bits 5-6
+        uint8_t FF_DUR5   : 1;  // bit 7
+    } field;
+} WAKE_UP_DUR_reg;
+
+union {
+    uint8_t raw;
+    struct {
+        uint8_t reserved         : 1;  // bit 0
+        uint8_t PD_DIS_INT2      : 1;  // bit 1
+        uint8_t INT2_6D          : 1;  // bit 2
+        uint8_t INT2_DOUBLE_TAP  : 1;  // bit 3
+        uint8_t INT2_FF          : 1;  // bit 4
+        uint8_t INT2_WU          : 1;  // bit 5
+        uint8_t INT2_SINGLE_TAP  : 1;  // bit 6
+        uint8_t INT2_SLEEP_CHANGE : 1;  // bit 7
+    } field;
+} MD2_CFG_reg;
+
+union {
+    uint8_t raw;
+    struct {
+        uint8_t Z_WU  : 1;  // bit 0
+        uint8_t Y_WU  : 1;  // bit 1
+        uint8_t X_WU  : 1;  // bit 2
+        uint8_t WU_IA : 1;  // bit 3
+        uint8_t SLEEP_STATE : 1;  // bit 4
+        uint8_t FF_IA : 1;  // bit 5
+        uint8_t SLEEP_CHANGE_IA : 1;  // bit 6
+        uint8_t reserved : 1;  // bit 7
+    } field;
+} WAKE_UP_SRC_reg;
 
 
 HAL_StatusTypeDef LIS2DU12_write_register(SPI_HandleTypeDef *hspi, LIS2DU12_RegAddr_t reg_addr, uint8_t reg_val){
@@ -169,8 +235,8 @@ uint8_t LIS2DU12_init(SPI_HandleTypeDef *hspi){
     }
 }
 
-uint8_t LIS2DU12_read_FIFO(SPI_HandleTypeDef *hspi, uint8_t *FIFO_length, int16_t acceleration_data[256][3]){
-    
+uint8_t LIS2DU12_read_FIFO(SPI_HandleTypeDef *hspi, uint8_t *FIFO_length, int8_t acceleration_data[256][3]){
+
     HAL_StatusTypeDef status;
 
     //Check how many unread samples there are in the FIFO
@@ -187,15 +253,18 @@ uint8_t LIS2DU12_read_FIFO(SPI_HandleTypeDef *hspi, uint8_t *FIFO_length, int16_
     //Determine how many bytes to read
     static uint8_t rx_buffer[769]; // 256 samples × 3 bytes max
     memset(rx_buffer, 0, 769);
+    if (num_unread_samples > 128) num_unread_samples = 128; //128 words = 256 samples, the full size of acceleration_data
     uint16_t num_bytes_to_read = (uint16_t)num_unread_samples * 6;  //In 2x depth mode each FIFO word is 6 bytes (2 samples in each FIFO word)
     if (num_bytes_to_read > sizeof(rx_buffer)) num_bytes_to_read = sizeof(rx_buffer);
-    
+
     //Read the data
     uint8_t addr = LIS2DU12_REG_FIFO_STATUS2 | 0x80;
     uint8_t status_dummy = 0;
+    static uint8_t tx_buffer[769];
+    memset(tx_buffer, 0, num_bytes_to_read);
     HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, 0);
     status = HAL_SPI_TransmitReceive(hspi, &addr, &status_dummy, 1, SPI_TIMEOUT);
-    status = HAL_SPI_TransmitReceive(hspi, rx_buffer, rx_buffer, num_bytes_to_read, SPI_TIMEOUT);
+    status = HAL_SPI_TransmitReceive(hspi, tx_buffer, rx_buffer, num_bytes_to_read, SPI_TIMEOUT);
     HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, 1);
     HAL_Delay(1);
 
@@ -203,23 +272,92 @@ uint8_t LIS2DU12_read_FIFO(SPI_HandleTypeDef *hspi, uint8_t *FIFO_length, int16_
         return 1;
     }
 
-    //Format the raw data into the acceleration data array
+    //Shift existing samples toward index 0 to make room, discarding the oldest ones that age out of the window,
+    //so newest sample always ends up at index 255 and callers never need to track a cursor.
     //rx buffer data formatted: x1,y1,z1,x2,y2,z2,x3,y3,z3... etc.
-    uint16_t sample_index = 0;
+    uint16_t new_sample_count = (uint16_t)num_unread_samples * 2;
+    if (new_sample_count < 256) {
+        memmove(&acceleration_data[0], &acceleration_data[new_sample_count], (256 - new_sample_count) * sizeof(acceleration_data[0]));
+    }
+
+    uint16_t sample_index = 256 - new_sample_count;
     uint16_t rx_buff_index = 1; //offset by 1 since the first byte is the value of the FIFO_STATUS2 register
 
     for (uint16_t word = 0; word < num_unread_samples; word++) {
         // Each word = 6 bytes: X_curr, Y_curr, Z_curr, X_prev, Y_prev, Z_prev
-        acceleration_data[sample_index][0] = (int16_t)((int32_t)(int8_t)rx_buffer[rx_buff_index++] * 1000 / 32);
-        //acceleration_data[sample_index][0] = rx_buffer[rx_buff_index++];
-        acceleration_data[sample_index][1] = (int16_t)((int32_t)(int8_t)rx_buffer[rx_buff_index++] * 1000 / 32);
-        acceleration_data[sample_index][2] = (int16_t)((int32_t)(int8_t)rx_buffer[rx_buff_index++] * 1000 / 32);
+        acceleration_data[sample_index][0] = (int8_t)rx_buffer[rx_buff_index++];
+        acceleration_data[sample_index][1] = (int8_t)rx_buffer[rx_buff_index++];
+        acceleration_data[sample_index][2] = (int8_t)rx_buffer[rx_buff_index++];
         sample_index++;
-        acceleration_data[sample_index][0] = (int16_t)((int32_t)(int8_t)rx_buffer[rx_buff_index++] * 1000 / 32);
-        acceleration_data[sample_index][1] = (int16_t)((int32_t)(int8_t)rx_buffer[rx_buff_index++] * 1000 / 32);
-        acceleration_data[sample_index][2] = (int16_t)((int32_t)(int8_t)rx_buffer[rx_buff_index++] * 1000 / 32);
+        acceleration_data[sample_index][0] = (int8_t)rx_buffer[rx_buff_index++];
+        acceleration_data[sample_index][1] = (int8_t)rx_buffer[rx_buff_index++];
+        acceleration_data[sample_index][2] = (int8_t)rx_buffer[rx_buff_index++];
         sample_index++;
     }
 
     return 0;
+}
+
+
+//function should setup movement detection interrupt output on INT2 pin. Configure as low power as possible.
+uint8_t LIS2DU12_configure_sleep(SPI_HandleTypeDef *hspi){
+
+    HAL_StatusTypeDef status;
+
+    //Disable FIFO (bypass mode): nothing needs to be collected while sleeping,
+    //only a wake-up event on INT2 is needed.
+    FIFO_CTRL_reg.field.FIFO_MODE = 0b000;
+    status = LIS2DU12_write_register(hspi, LIS2DU12_REG_FIFO_CTRL, FIFO_CTRL_reg.raw);
+    HAL_Delay(1);
+
+    //Full scale +-2g, 1.6 Hz ultralow-power mode (lowest current draw, ~0.47uA typ)
+    CTRL5_reg.field.FS = 0b00;
+    CTRL5_reg.field.BW = 0b00;
+    CTRL5_reg.field.ODR = 0b0001;
+    status = LIS2DU12_write_register(hspi, LIS2DU12_REG_CTRL5, CTRL5_reg.raw);
+
+    //Changing ODR/FS resets the internal (high-pass) filter the wake-up engine reads from.
+    //Give it time to settle before arming the threshold, otherwise the settling transient
+    //itself reads as a false wake-up event on a stationary device. A few ODR periods at
+    //1.6 Hz is ~seconds; 600 ms covers it with margin.
+    HAL_Delay(600);
+
+    //Enable wake-up event detection on all three axes
+    CTRL1_reg.field.WU_X_EN = 1;
+    CTRL1_reg.field.WU_Y_EN = 1;
+    CTRL1_reg.field.WU_Z_EN = 1;
+    status = LIS2DU12_write_register(hspi, LIS2DU12_REG_CTRL1, CTRL1_reg.raw);
+    HAL_Delay(1);
+
+    //Wake-up threshold. 1 LSB = FS/(2^6) = 2000mg/64 ~= 31mg (WAKE_THS_W = 0).
+    //WK_THS = 4 -> ~125mg. Tune to taste.
+    WAKE_UP_THS_reg.field.WK_THS = 4;
+    WAKE_UP_THS_reg.field.SLEEP_ON = 0; //no need for auto ODR switch, already at lowest ODR
+    status = LIS2DU12_write_register(hspi, LIS2DU12_REG_WAKE_UP_THS, WAKE_UP_THS_reg.raw);
+    HAL_Delay(1);
+
+    //Wake-up duration: minimum debounce (1 ODR_time)
+    WAKE_UP_DUR_reg.field.WAKE_DUR = 0b00;
+    status = LIS2DU12_write_register(hspi, LIS2DU12_REG_WAKE_UP_DUR, WAKE_UP_DUR_reg.raw);
+    HAL_Delay(1);
+
+    //Route wake-up event to INT2 pin
+    MD2_CFG_reg.field.INT2_WU = 1;
+    status = LIS2DU12_write_register(hspi, LIS2DU12_REG_MD2_CFG, MD2_CFG_reg.raw);
+    HAL_Delay(1);
+
+    //Enable interrupt generation. Level mode (LIR=0, INT_SHORT_EN=0): INT2 goes
+    //high on the wake-up event and low again once acceleration drops back below threshold
+    INTERRUPT_CFG_reg.field.INTERRUPTS_ENABLE = 1;
+    INTERRUPT_CFG_reg.field.LIR = 0;
+    INTERRUPT_CFG_reg.field.INT_SHORT_EN = 0;
+    status = LIS2DU12_write_register(hspi, LIS2DU12_REG_INTERRUPT_CFG, INTERRUPT_CFG_reg.raw);
+    HAL_Delay(1);
+
+    if (status == HAL_OK){
+        return 0;
+    }
+    else{
+        return 1;
+    }
 }
