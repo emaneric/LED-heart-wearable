@@ -2859,7 +2859,7 @@
 		(uuid "6d3371f0-9a35-4629-9a56-ebda46c5c15c")
 	)
 	(rectangle
-		(start 34.29 41.91)
+		(start 34.29 27.94)
 		(end 91.44 92.71)
 		(stroke
 			(width 0.381)
@@ -2896,7 +2896,7 @@
 	)
 	(text "Power Input"
 		(exclude_from_sim no)
-		(at 64.008 39.116 0)
+		(at 64.262 25.4 0)
 		(effects
 			(font
 				(size 5.08 5.08)
@@ -2940,8 +2940,8 @@
 	)
 	(text_box "Program/Debug"
 		(exclude_from_sim no)
-		(at 194.31 110.49 0)
-		(size 25.4 30.48)
+		(at 194.31 106.68 0)
+		(size 25.4 34.29)
 		(margins 0.9525 0.9525 0.9525 0.9525)
 		(stroke
 			(width 0)
@@ -3019,6 +3019,12 @@
 		(uuid "86206aaa-a366-4470-967c-e60d3211b1cd")
 	)
 	(junction
+		(at 58.42 55.88)
+		(diameter 0)
+		(color 0 0 0 0)
+		(uuid "902950be-0844-4fcc-8a2d-0ba0d7e989d5")
+	)
+	(junction
 		(at 264.16 99.06)
 		(diameter 0)
 		(color 0 0 0 0)
@@ -3071,12 +3077,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "e27ae8ad-fb3e-4a20-af57-a1bc5a95c37e")
-	)
-	(junction
-		(at 142.24 85.09)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "ec628107-1d03-40c6-a353-0e15a13285f9")
 	)
 	(no_connect
 		(at 151.13 110.49)
@@ -3268,6 +3268,16 @@
 	)
 	(wire
 		(pts
+			(xy 58.42 55.88) (xy 54.61 55.88)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "17e421f4-7455-4421-b3bf-6854e7fc8d8d")
+	)
+	(wire
+		(pts
 			(xy 52.07 156.21) (xy 52.07 154.94)
 		)
 		(stroke
@@ -3448,6 +3458,16 @@
 	)
 	(wire
 		(pts
+			(xy 58.42 44.45) (xy 58.42 55.88)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "49ead6d4-393c-4dda-b4ec-fc25b22394cb")
+	)
+	(wire
+		(pts
 			(xy 170.18 71.12) (xy 170.18 72.39)
 		)
 		(stroke
@@ -3495,16 +3515,6 @@
 			(type default)
 		)
 		(uuid "5f8572df-755b-4ef9-a2d2-17bd37767c64")
-	)
-	(wire
-		(pts
-			(xy 142.24 83.82) (xy 142.24 85.09)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "63bdc2ba-c82d-4f15-be6e-1cbe550a547f")
 	)
 	(wire
 		(pts
@@ -3598,7 +3608,17 @@
 	)
 	(wire
 		(pts
-			(xy 59.69 55.88) (xy 54.61 55.88)
+			(xy 71.12 44.45) (xy 71.12 55.88)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "7ca7bf48-7aef-4fcd-9b96-1e0db4f5310b")
+	)
+	(wire
+		(pts
+			(xy 59.69 55.88) (xy 58.42 55.88)
 		)
 		(stroke
 			(width 0)
@@ -3665,6 +3685,16 @@
 			(type default)
 		)
 		(uuid "9206eae4-4524-445b-ac91-5e2fad2a98ff")
+	)
+	(wire
+		(pts
+			(xy 68.58 44.45) (xy 71.12 44.45)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "96bf8e87-6a24-492f-ac75-48c6bb0fe712")
 	)
 	(wire
 		(pts
@@ -3858,6 +3888,16 @@
 	)
 	(wire
 		(pts
+			(xy 60.96 44.45) (xy 58.42 44.45)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "b6580497-6d7e-4ff1-9809-bc8e48a27b0c")
+	)
+	(wire
+		(pts
 			(xy 52.07 142.24) (xy 52.07 143.51)
 		)
 		(stroke
@@ -4008,6 +4048,16 @@
 	)
 	(wire
 		(pts
+			(xy 199.39 115.57) (xy 205.74 115.57)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "e068054d-f6a0-4435-87b2-6b08d0499344")
+	)
+	(wire
+		(pts
 			(xy 204.47 123.19) (xy 204.47 124.46)
 		)
 		(stroke
@@ -4126,6 +4176,16 @@
 		)
 		(uuid "fd045ff6-a4ae-45e5-94e3-1ca0b0b685f2")
 	)
+	(label "RST"
+		(at 199.39 115.57 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "0a9c2dec-851b-4b53-8478-85d288a960f4")
+	)
 	(label "MISO"
 		(at 182.88 113.03 180)
 		(effects
@@ -4175,6 +4235,16 @@
 			(justify right bottom)
 		)
 		(uuid "7bb7e18a-3d38-4a80-9054-34e5dddb192f")
+	)
+	(label "RST"
+		(at 142.24 85.09 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "7c19af43-cd90-4925-8f67-e4032521d877")
 	)
 	(label "MOSI"
 		(at 96.52 148.59 180)
@@ -4836,6 +4906,88 @@
 			(project "main-PCB"
 				(path "/05d84283-74ff-469f-a29b-6104f656f1bf"
 					(reference "#PWR019")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:R")
+		(at 64.77 44.45 270)
+		(mirror x)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(in_pos_files yes)
+		(dnp yes)
+		(uuid "4467ba54-d536-483b-9765-9c4d04c3a124")
+		(property "Reference" "R5"
+			(at 63.5 39.624 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "0"
+			(at 63.5001 41.91 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "Resistor_SMD:R_0402_1005Metric"
+			(at 64.77 46.228 90)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 64.77 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "Resistor"
+			(at 64.77 44.45 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "2"
+			(uuid "f25e1e9b-c932-485a-83f3-064ba7894ab3")
+		)
+		(pin "1"
+			(uuid "69ae1e11-cbdf-4c5d-bd9b-2a1cb992629c")
+		)
+		(instances
+			(project "main-PCB"
+				(path "/05d84283-74ff-469f-a29b-6104f656f1bf"
+					(reference "R5")
 					(unit 1)
 				)
 			)
@@ -6298,86 +6450,6 @@
 			(project "main-PCB"
 				(path "/05d84283-74ff-469f-a29b-6104f656f1bf"
 					(reference "#PWR017")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Connector:TestPoint")
-		(at 142.24 83.82 0)
-		(mirror y)
-		(unit 1)
-		(body_style 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(in_pos_files no)
-		(dnp no)
-		(uuid "a94c066b-948a-4186-9c35-8b3aa001b495")
-		(property "Reference" "TP4"
-			(at 142.24 79.248 0)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify bottom)
-			)
-		)
-		(property "Value" "TestPoint"
-			(at 139.7 81.7879 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" "EN_Designs-Footprints:TestPoint_Pad_D0.5mm"
-			(at 137.16 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Datasheet" ""
-			(at 137.16 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Description" "test point"
-			(at 142.24 83.82 0)
-			(hide yes)
-			(show_name no)
-			(do_not_autoplace no)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(pin "1"
-			(uuid "f9da898b-4ff9-4dce-b4ad-2e3b3cccbc76")
-		)
-		(instances
-			(project "main-PCB"
-				(path "/05d84283-74ff-469f-a29b-6104f656f1bf"
-					(reference "TP4")
 					(unit 1)
 				)
 			)
@@ -7964,6 +8036,86 @@
 			(project "main-PCB"
 				(path "/05d84283-74ff-469f-a29b-6104f656f1bf"
 					(reference "C2")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Connector:TestPoint")
+		(at 205.74 115.57 270)
+		(mirror x)
+		(unit 1)
+		(body_style 1)
+		(exclude_from_sim no)
+		(in_bom no)
+		(on_board yes)
+		(in_pos_files no)
+		(dnp no)
+		(uuid "dedb93ed-0f9c-4736-af31-8d6b6bf0aa37")
+		(property "Reference" "TP4"
+			(at 210.82 115.57 90)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "TestPoint"
+			(at 207.7721 113.03 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "TestPoint:TestPoint_Pad_D1.0mm"
+			(at 205.74 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 205.74 110.49 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "test point"
+			(at 205.74 115.57 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(pin "1"
+			(uuid "6dd0aafc-f20f-4510-84e0-a258efff073d")
+		)
+		(instances
+			(project "main-PCB"
+				(path "/05d84283-74ff-469f-a29b-6104f656f1bf"
+					(reference "TP4")
 					(unit 1)
 				)
 			)

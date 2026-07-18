@@ -34,6 +34,7 @@ enable_language(C ASM)
 # Create an executable object type
 add_executable(${CMAKE_PROJECT_NAME}
     Core/Src/LIS2DU12.c
+    Core/Src/LIS2DW12.c
     Drivers/SEGGER_RTT/SEGGER_RTT.c
     Core/Src/retarget.c)
 
