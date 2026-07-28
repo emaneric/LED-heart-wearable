@@ -52,6 +52,30 @@
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* Captured exception frame. Inspect these in the debugger after a fault:
+   fault_pc is the instruction that faulted - look it up with
+     arm-none-eabi-addr2line -e build/Debug/LED-heart.elf <fault_pc>
+   fault_lr is the return address of the function that was running. */
+volatile uint32_t fault_r0, fault_r1, fault_r2, fault_r3;
+volatile uint32_t fault_r12, fault_lr, fault_pc, fault_psr;
+
+void HardFault_Report(uint32_t *stacked_frame)
+{
+  fault_r0  = stacked_frame[0];
+  fault_r1  = stacked_frame[1];
+  fault_r2  = stacked_frame[2];
+  fault_r3  = stacked_frame[3];
+  fault_r12 = stacked_frame[4];
+  fault_lr  = stacked_frame[5];
+  fault_pc  = stacked_frame[6];
+  fault_psr = stacked_frame[7];
+
+  __BKPT(0);
+  while (1)
+  {
+  }
+}
+
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
@@ -81,17 +105,27 @@ void NMI_Handler(void)
 /**
   * @brief This function handles Hard fault interrupt.
   */
-void HardFault_Handler(void)
+/* USER CODE BEGIN HardFault_IRQn 0 */
+/* Naked so the exception frame is untouched: work out whether the frame was
+   stacked on MSP or PSP (EXC_RETURN bit 2), then hand its address to
+   HardFault_Report. Cortex-M0+ has no CFSR/HFSR detail registers, so the
+   stacked PC is the only real evidence about where the fault came from. */
+__attribute__((naked)) void HardFault_Handler(void)
 {
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-
-  /* USER CODE END HardFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
-  }
+  __ASM volatile (
+    "movs r0, #4                \n"
+    "mov  r1, lr                \n"
+    "tst  r0, r1                \n"
+    "beq  1f                    \n"
+    "mrs  r0, psp               \n"
+    "b    2f                    \n"
+    "1:                         \n"
+    "mrs  r0, msp               \n"
+    "2:                         \n"
+    "bl   HardFault_Report      \n"
+  );
 }
+/* USER CODE END HardFault_IRQn 0 */
 
 /**
   * @brief This function handles System service call via SVC instruction.

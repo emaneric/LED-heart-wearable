@@ -32,9 +32,12 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -fdata-sections -ffunction-sections -f
 # However, most GCC toolchains do not support this option, which causes a compilation error; for this reason, the feature is disabled by default.
 # set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fcyclomatic-complexity")
 
-set(CMAKE_C_FLAGS_DEBUG "-O0 -g3")
+# -Og rather than -O0: this is a 16 KB part (STM32U031K4U6) and -O0 leaves only
+# ~460 bytes free, which is not enough to add a function. -Og is the optimisation
+# level intended for debugging, so stepping and breakpoints stay usable.
+set(CMAKE_C_FLAGS_DEBUG "-Og -g3")
 set(CMAKE_C_FLAGS_RELEASE "-Os -g0")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g3")
+set(CMAKE_CXX_FLAGS_DEBUG "-Og -g3")
 set(CMAKE_CXX_FLAGS_RELEASE "-Os -g0")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -fno-rtti -fno-exceptions -fno-threadsafe-statics")

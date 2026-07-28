@@ -40,7 +40,11 @@ ENTRY(Reset_Handler)
 MEMORY
 {
   RAM    (xrw)    : ORIGIN = 0x20000000,   LENGTH = 8K
-  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 64K
+  /* STM32U031K4U6: the "K4" suffix is a 16 KB part, confirmed by the flash size
+     register at 0x1FFF3EA0 reading 0x0010. CubeMX emitted 64K here, which links
+     silently but cannot be programmed - flash aliases every 16 KB, so anything
+     placed above 0x08004000 wraps onto the vector table instead of landing. */
+  FLASH    (rx)    : ORIGIN = 0x8000000,   LENGTH = 16K
 }
 /* Highest address of the user mode stack */
 _estack = ORIGIN(RAM) + LENGTH(RAM); /* end of "RAM" Ram type memory */

@@ -214,10 +214,12 @@ uint8_t LIS2DW12_init(SPI_HandleTypeDef *hspi){
     //Test we can read from sensor (WHO_AM_I should read 0x44)
     uint8_t WHO_AM_I_value = 0;
     status = LIS2DW12_read_register(hspi, LIS2DW12_REG_WHO_AM_I, &WHO_AM_I_value);
+    __NOP();
     if (WHO_AM_I_value != 0x44){
+        __NOP();
         return 1;
     }
-    HAL_Delay(1);
+    HAL_Delay(1);   //Who am i returning 0.
 
     //Enable register address to automatically increment during a multi byte read
     CTRL2_reg.field.IF_ADD_INC = 1;

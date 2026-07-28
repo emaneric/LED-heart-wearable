@@ -32,11 +32,10 @@ message("Build type: " ${CMAKE_BUILD_TYPE})
 enable_language(C ASM)
 
 # Create an executable object type
+# LIS2DU12.c is kept in the tree for reference but deliberately not compiled -
+# the 16 KB part has no room to spare and the driver is superseded by LIS2DW12.
 add_executable(${CMAKE_PROJECT_NAME}
-    Core/Src/LIS2DU12.c
-    Core/Src/LIS2DW12.c
-    Drivers/SEGGER_RTT/SEGGER_RTT.c
-    Core/Src/retarget.c)
+    Core/Src/LIS2DW12.c)
 
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
@@ -53,7 +52,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
-    Drivers/SEGGER_RTT
+    # Add user include paths here
 )
 
 # Add project symbols (macros)

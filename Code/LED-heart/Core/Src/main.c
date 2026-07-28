@@ -17,12 +17,6 @@
   */
 
 
-// Segger RTT host: localhost
-// Segger RTT port: 19021
-
-
-
-
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -30,18 +24,17 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
-#include "LIS2DU12.h"
 #include "LIS2DW12.h"
 #include "stm32u0xx_hal.h"
 #include "stm32u0xx_hal_gpio.h"
-#include "SEGGER_RTT.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef enum {
     SLEEP_MODE_LIGHT,
-    SLEEP_MODE_DEEP
+    SLEEP_MODE_DEEP,
+    SLEEP_MODE_DEEP_FORCE
 } SleepMode_t;
 
 typedef enum {
@@ -128,22 +121,23 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
 
-  //If accelerometer init fails, flash light and wait forever
-  if (LIS2DW12_init(&hspi1) != 0){
+  //If accelerometer init fails, flash light and then go to sleep forever
+  HAL_Delay(1);
+  if (LIS2DW12_init(&hspi1) != 0){  //init is failing now
     uint32_t flash_start_time = HAL_GetTick();
 
-    while (HAL_GetTick() < flash_start_time + 5000){
+    while (HAL_GetTick() < flash_start_time + 10000){
       __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, LED_PWM_MAX); // full on
       HAL_Delay(100);
       __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, 0);           // off
       HAL_Delay(100);
     }
-
+    go_to_sleep(SLEEP_MODE_DEEP_FORCE);
+    
     while (1){
       __NOP();
     }
   }
-  HAL_Delay(10000);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -155,10 +149,11 @@ int main(void)
     static uint8_t FIFO_unread_length = 0;
     static uint8_t movement_score = 0;
 
-    if (HAL_GPIO_ReadPin(INT2_GPIO_Port, INT2_Pin) == 1){ //Need to check config of sensor, this pin is not beign set high
+    if (HAL_GPIO_ReadPin(INT2_GPIO_Port, INT2_Pin) == 1){ //Need to check config of sensor, this pin is not being set high
       __NOP();
       if (LIS2DW12_read_FIFO(&hspi1, &FIFO_unread_length, acceleration_data) == 0){
         movement_score = calculate_movement_score(acceleration_data);
+        __NOP();
       }
       else {
         //Error reading FIFO
@@ -166,7 +161,7 @@ int main(void)
       }
     }
 
-    //auto_sleep_tick(movement_score);  //when uncommented, hard fault occurs
+    auto_sleep_tick(movement_score);
     led_tick(movement_score);
 
     /* USER CODE END WHILE */
@@ -405,6 +400,10 @@ uint8_t calculate_movement_score(int8_t acceleration_data[256][3]){
                        PWR_GPIO_BIT_8  | PWR_GPIO_BIT_9  | PWR_GPIO_BIT_10 | PWR_GPIO_BIT_11 | \
                        PWR_GPIO_BIT_12 | PWR_GPIO_BIT_13 | PWR_GPIO_BIT_14 | PWR_GPIO_BIT_15)
 
+/* PA13/PA14 are SWDIO/SWCLK. Pulling them down through the PWR block fights the
+   debug probe, so keep them out of the port A mask. */
+#define PORT_A_PULLDOWN_PINS (ALL_GPIO_PINS & ~(PWR_GPIO_BIT_13 | PWR_GPIO_BIT_14))
+
 void go_to_sleep(SleepMode_t mode){
     switch (mode) {
         case SLEEP_MODE_DEEP:
@@ -419,7 +418,7 @@ void go_to_sleep(SleepMode_t mode){
                  above the datasheet shutdown spec. Only the PWR block's pull config
                  survives into Shutdown, so drive every pin low through it. This also
                  gives WKUP3 (PA1) a defined low level, consistent with wake-on-high. */
-              HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_A, ALL_GPIO_PINS);
+              HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_A, PORT_A_PULLDOWN_PINS);
               HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_B, ALL_GPIO_PINS);
               HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_C, ALL_GPIO_PINS);
               HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_D, ALL_GPIO_PINS);
@@ -437,6 +436,19 @@ void go_to_sleep(SleepMode_t mode){
             }
 
             break;
+
+        case SLEEP_MODE_DEEP_FORCE:
+          LIS2DW12_configure_sleep(&hspi1);
+          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_A, PORT_A_PULLDOWN_PINS);
+          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_B, ALL_GPIO_PINS);
+          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_C, ALL_GPIO_PINS);
+          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_D, ALL_GPIO_PINS);
+          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_F, ALL_GPIO_PINS);
+          HAL_PWREx_EnablePullUpPullDownConfig();
+          __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF3);
+          HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN3_HIGH);
+          HAL_PWR_EnterSHUTDOWNMode();
+          break;
 
         case SLEEP_MODE_LIGHT:
 
