@@ -393,16 +393,44 @@ uint8_t calculate_movement_score(int8_t acceleration_data[256][3]){
 }
 
 
-/* Bit mask covering all 16 I/O positions. The PWR pull-down helper masks this
+/* Bit mask covering all 16 I/O positions. The PWR pull helpers mask this
    down to the pins that actually exist on the sparse ports (D, F) internally. */
 #define ALL_GPIO_PINS (PWR_GPIO_BIT_0  | PWR_GPIO_BIT_1  | PWR_GPIO_BIT_2  | PWR_GPIO_BIT_3  | \
                        PWR_GPIO_BIT_4  | PWR_GPIO_BIT_5  | PWR_GPIO_BIT_6  | PWR_GPIO_BIT_7  | \
                        PWR_GPIO_BIT_8  | PWR_GPIO_BIT_9  | PWR_GPIO_BIT_10 | PWR_GPIO_BIT_11 | \
                        PWR_GPIO_BIT_12 | PWR_GPIO_BIT_13 | PWR_GPIO_BIT_14 | PWR_GPIO_BIT_15)
 
-/* PA13/PA14 are SWDIO/SWCLK. Pulling them down through the PWR block fights the
-   debug probe, so keep them out of the port A mask. */
-#define PORT_A_PULLDOWN_PINS (ALL_GPIO_PINS & ~(PWR_GPIO_BIT_13 | PWR_GPIO_BIT_14))
+/* Entering Shutdown releases the GPIO output drivers and only the PWR block's pull
+   config survives, so it alone decides what every net sits at while asleep. The
+   STM32's own I/O logic is unpowered - a floating pin costs the MCU nothing - so
+   the pulls exist purely for the parts on the other end of the nets, and which
+   direction each one needs depends on who drives it:
+
+     - Sensor INPUTS (SCK PB3, SDI PA7, CS PA15) must be held. Left floating they
+       drift to mid-rail and burn crowbar current in the LIS2DW12's input buffers.
+       CS is held HIGH to keep the device deselected; the rest idle low (CPOL=0).
+     - Sensor OUTPUTS (SDO PA11, INT1 PA1, INT2 PA2) must be left alone. These are
+       push-pull drivers, so a pull cannot help and can only fight: a ~40k pull-down
+       against a driver asserting high wastes ~70uA at 2.8V. INT2 is the trap - it
+       is not a wake pin, so it can sit asserted and burn current indefinitely
+       without ever waking the board to reveal the problem.
+     - PA3 drives the LED and is held LOW so the LED (or its driver) stays off.
+     - PA13/PA14 are SWDIO/SWCLK, left unpulled so we never fight a debug probe.
+     - Everything else is unconnected; pulled low as harmless insurance. */
+#define PORT_A_SENSOR_OUTPUTS (PWR_GPIO_BIT_1 | PWR_GPIO_BIT_2 | PWR_GPIO_BIT_11)
+#define PORT_A_SWD_PINS       (PWR_GPIO_BIT_13 | PWR_GPIO_BIT_14)
+#define PORT_A_PULLDOWN_PINS  (ALL_GPIO_PINS & ~(PORT_A_SENSOR_OUTPUTS | \
+                                                 PORT_A_SWD_PINS | PWR_GPIO_BIT_15))
+
+static void configure_shutdown_pin_pulls(void){
+  HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_A, PORT_A_PULLDOWN_PINS);
+  HAL_PWREx_EnableGPIOPullUp(PWR_GPIO_A, PWR_GPIO_BIT_15);
+  HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_B, ALL_GPIO_PINS);
+  HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_C, ALL_GPIO_PINS);
+  HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_D, ALL_GPIO_PINS);
+  HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_F, ALL_GPIO_PINS);
+  HAL_PWREx_EnablePullUpPullDownConfig();
+}
 
 void go_to_sleep(SleepMode_t mode){
     switch (mode) {
@@ -412,19 +440,7 @@ void go_to_sleep(SleepMode_t mode){
                otherwise a flag left set from a previous event wakes us immediately. */
 
             if(!LIS2DW12_configure_sleep(&hspi1)){
-              /* In Shutdown the GPIO/analog config set in MX_GPIO_Init is lost, so
-                 every pin reverts to a floating input. Floating inputs settle to
-                 mid-rail and burn current, which is why a bare board measures far
-                 above the datasheet shutdown spec. Only the PWR block's pull config
-                 survives into Shutdown, so drive every pin low through it. This also
-                 gives WKUP3 (PA1) a defined low level, consistent with wake-on-high. */
-              HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_A, PORT_A_PULLDOWN_PINS);
-              HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_B, ALL_GPIO_PINS);
-              HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_C, ALL_GPIO_PINS);
-              HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_D, ALL_GPIO_PINS);
-              HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_F, ALL_GPIO_PINS);
-              HAL_PWREx_EnablePullUpPullDownConfig();
-
+              configure_shutdown_pin_pulls();
               __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF3);
               HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN3_HIGH);
               HAL_PWR_EnterSHUTDOWNMode();
@@ -439,12 +455,7 @@ void go_to_sleep(SleepMode_t mode){
 
         case SLEEP_MODE_DEEP_FORCE:
           LIS2DW12_configure_sleep(&hspi1);
-          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_A, PORT_A_PULLDOWN_PINS);
-          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_B, ALL_GPIO_PINS);
-          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_C, ALL_GPIO_PINS);
-          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_D, ALL_GPIO_PINS);
-          HAL_PWREx_EnableGPIOPullDown(PWR_GPIO_F, ALL_GPIO_PINS);
-          HAL_PWREx_EnablePullUpPullDownConfig();
+          configure_shutdown_pin_pulls();
           __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF3);
           HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN3_HIGH);
           HAL_PWR_EnterSHUTDOWNMode();

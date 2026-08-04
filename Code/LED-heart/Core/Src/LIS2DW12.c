@@ -327,29 +327,28 @@ uint8_t LIS2DW12_read_FIFO(SPI_HandleTypeDef *hspi, uint8_t *FIFO_length, int8_t
 }
 
 
-//function should setup movement detection interrupt output on INT1 pin. Configure as low power as possible.
 uint8_t LIS2DW12_configure_sleep(SPI_HandleTypeDef *hspi){
 
-    HAL_StatusTypeDef status;
+    uint8_t error = 0;
 
     //Disable FIFO (bypass mode): nothing needs to be collected while sleeping,
     //only a wake-up event on INT1 is needed.
     FIFO_CTRL_reg.field.FMode = 0b000;
-    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_FIFO_CTRL, FIFO_CTRL_reg.raw);
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_FIFO_CTRL, FIFO_CTRL_reg.raw) != HAL_OK);
     HAL_Delay(1);
 
     //1.6 Hz, low-power mode 1 (12-bit) - lowest current draw (~0.38uA typ)
     CTRL1_reg.field.ODR = 0b0001;  //1.6 Hz in low-power
     CTRL1_reg.field.MODE = 0b00;   //low-power mode
     CTRL1_reg.field.LP_MODE = 0b00;//low-power mode 1
-    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL1, CTRL1_reg.raw);
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL1, CTRL1_reg.raw) != HAL_OK);
 
     //Full scale +-2g, ODR/2 bandwidth, low-pass path
     CTRL6_reg.field.FS = 0b00;
     CTRL6_reg.field.BW_FILT = 0b00;
     CTRL6_reg.field.FDS = 0;
     CTRL6_reg.field.LOW_NOISE = 0;
-    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL6, CTRL6_reg.raw);
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL6, CTRL6_reg.raw) != HAL_OK);
 
     //Changing ODR/FS resets the internal filter the wake-up engine reads from.
     //Give it time to settle before arming the threshold, otherwise the settling transient
@@ -362,12 +361,12 @@ uint8_t LIS2DW12_configure_sleep(SPI_HandleTypeDef *hspi){
     //the wake-up event alone is routed to INT1.
     WAKE_UP_THS_reg.field.WK_THS = 4;
     WAKE_UP_THS_reg.field.SLEEP_ON = 0;
-    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_WAKE_UP_THS, WAKE_UP_THS_reg.raw);
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_WAKE_UP_THS, WAKE_UP_THS_reg.raw) != HAL_OK);
     HAL_Delay(1);
 
     //Wake-up duration: minimum debounce (1 ODR_time)
     WAKE_UP_DUR_reg.field.WAKE_DUR = 0b00;
-    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_WAKE_UP_DUR, WAKE_UP_DUR_reg.raw);
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_WAKE_UP_DUR, WAKE_UP_DUR_reg.raw) != HAL_OK);
     HAL_Delay(1);
 
     //Interrupt pad electrical config: active high, push-pull, pulsed.
@@ -375,24 +374,19 @@ uint8_t LIS2DW12_configure_sleep(SPI_HandleTypeDef *hspi){
     CTRL3_reg.field.H_LACTIVE = 0;
     CTRL3_reg.field.PP_OD = 0;
     CTRL3_reg.field.LIR = 0;
-    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL3, CTRL3_reg.raw);
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL3, CTRL3_reg.raw) != HAL_OK);
     HAL_Delay(1);
 
     //Route wake-up recognition to the INT1 pad (accelerometer INT1 -> PA1 wake pin).
     //On the LIS2DW12 the wake-up event can only be routed to INT1.
     CTRL4_INT1_PAD_reg.field.INT1_WU = 1;
-    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL4_INT1_PAD, CTRL4_INT1_PAD_reg.raw);
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL4_INT1_PAD, CTRL4_INT1_PAD_reg.raw) != HAL_OK);
     HAL_Delay(1);
 
     //Globally enable the interrupt-generating functions (required for wake-up).
     CTRL7_reg.field.INTERRUPTS_ENABLE = 1;
-    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL7, CTRL7_reg.raw);
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL7, CTRL7_reg.raw) != HAL_OK);
     HAL_Delay(1);
 
-    if (status == HAL_OK){
-        return 0;
-    }
-    else{
-        return 1;
-    }
+    return error;
 }
