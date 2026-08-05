@@ -123,7 +123,7 @@ int main(void)
 
   //If accelerometer init fails, flash light and then go to sleep forever
   HAL_Delay(1);
-  if (LIS2DW12_init(&hspi1) != 0){  //init is failing now
+  if (LIS2DW12_init(&hspi1) != 0){ 
     uint32_t flash_start_time = HAL_GetTick();
 
     while (HAL_GetTick() < flash_start_time + 10000){
@@ -149,7 +149,7 @@ int main(void)
     static uint8_t FIFO_unread_length = 0;
     static uint8_t movement_score = 0;
 
-    if (HAL_GPIO_ReadPin(INT2_GPIO_Port, INT2_Pin) == 1){ //Need to check config of sensor, this pin is not being set high
+    if (HAL_GPIO_ReadPin(INT2_GPIO_Port, INT2_Pin) == 1){
       __NOP();
       if (LIS2DW12_read_FIFO(&hspi1, &FIFO_unread_length, acceleration_data) == 0){
         movement_score = calculate_movement_score(acceleration_data);

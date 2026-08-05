@@ -219,10 +219,15 @@ uint8_t LIS2DW12_init(SPI_HandleTypeDef *hspi){
         __NOP();
         return 1;
     }
-    HAL_Delay(1);   //Who am i returning 0.
+    HAL_Delay(1);
 
-    //Enable register address to automatically increment during a multi byte read
+    //Enable register address to automatically increment during a multi byte read.
+    //Also disable I2C: with both interfaces live the device picks its mode from CS,
+    //so the moment CS goes high (as it does for the whole of Shutdown) it switches to
+    //I2C and reinterprets the pads - SDO becomes the SA0 address input rather than a
+    //tri-stated SPI output. Pinning it to SPI keeps the pad behaviour defined while asleep.
     CTRL2_reg.field.IF_ADD_INC = 1;
+    CTRL2_reg.field.I2C_DISABLE = 1;
     status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL2, CTRL2_reg.raw);
     HAL_Delay(1);
 
@@ -335,6 +340,13 @@ uint8_t LIS2DW12_configure_sleep(SPI_HandleTypeDef *hspi){
     //only a wake-up event on INT1 is needed.
     FIFO_CTRL_reg.field.FMode = 0b000;
     error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_FIFO_CTRL, FIFO_CTRL_reg.raw) != HAL_OK);
+    HAL_Delay(1);
+
+    //Unroute everything from the INT2 pad. Only INT1 is a wake source, so anything
+    //still routed here can only assert into a sleeping MCU and drive the pad against
+    //the board for the whole sleep without ever waking us to show it.
+    CTRL5_INT2_PAD_reg.raw = 0;
+    error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL5_INT2_PAD, CTRL5_INT2_PAD_reg.raw) != HAL_OK);
     HAL_Delay(1);
 
     //1.6 Hz, low-power mode 1 (12-bit) - lowest current draw (~0.38uA typ)
