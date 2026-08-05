@@ -215,11 +215,52 @@ uint8_t LIS2DW12_init(SPI_HandleTypeDef *hspi){
     uint8_t WHO_AM_I_value = 0;
     status = LIS2DW12_read_register(hspi, LIS2DW12_REG_WHO_AM_I, &WHO_AM_I_value);
     __NOP();
-    if (WHO_AM_I_value != 0x44){
+    if (WHO_AM_I_value != LIS2DW12_WHO_AM_I_VALUE){
         __NOP();
         return 1;
     }
     HAL_Delay(1);
+
+    //Soft reset before configuring anything. Waking from Shutdown resets the MCU but
+    //NOT the sensor: the shadow registers above are statics that come back zeroed while
+    //the device still holds whatever configure_sleep left in it. Registers that
+    //configure_sleep writes but init does not (CTRL3, CTRL4, CTRL7, WAKE_UP_THS,
+    //WAKE_UP_DUR) would otherwise stay stale, so the shadows would lie about the device
+    //and a later read-modify-write would clear bits it never meant to touch. Resetting
+    //here makes "shadow == device" true by construction on every boot, cold or woken.
+    CTRL2_reg.raw = 0;
+    CTRL2_reg.field.SOFT_RESET = 1;
+    status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL2, CTRL2_reg.raw);
+    if (status != HAL_OK){
+        return 1;
+    }
+
+    //SOFT_RESET self-clears once the reset completes (a few microseconds). Poll rather
+    //than guess, but bound it so a dead device cannot hang the boot.
+    uint32_t reset_timeout = HAL_GetTick() + 10;
+    do {
+        if (LIS2DW12_read_register(hspi, LIS2DW12_REG_CTRL2, &CTRL2_reg.raw) != HAL_OK){
+            return 1;
+        }
+    } while (CTRL2_reg.field.SOFT_RESET && (HAL_GetTick() < reset_timeout));
+
+    if (CTRL2_reg.field.SOFT_RESET){
+        return 1;  //reset never completed - treat as a dead sensor
+    }
+
+    //Device is now at its power-on defaults, so bring every shadow back in step with it.
+    //All of these default to 0x00; CTRL2 defaults to 0x04 (IF_ADD_INC set) but is
+    //rewritten from scratch immediately below, so zeroing it here is safe.
+    CTRL1_reg.raw = 0;
+    CTRL2_reg.raw = 0;
+    CTRL3_reg.raw = 0;
+    CTRL4_INT1_PAD_reg.raw = 0;
+    CTRL5_INT2_PAD_reg.raw = 0;
+    CTRL6_reg.raw = 0;
+    CTRL7_reg.raw = 0;
+    FIFO_CTRL_reg.raw = 0;
+    WAKE_UP_THS_reg.raw = 0;
+    WAKE_UP_DUR_reg.raw = 0;
 
     //Enable register address to automatically increment during a multi byte read.
     //Also disable I2C: with both interfaces live the device picks its mode from CS,

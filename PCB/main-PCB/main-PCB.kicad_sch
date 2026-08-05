@@ -8718,7 +8718,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "10M"
+		(property "Value" "20M"
 			(at 73.66 62.2299 0)
 			(show_name no)
 			(do_not_autoplace no)
