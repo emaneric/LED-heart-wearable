@@ -52,6 +52,23 @@ typedef enum {
 /* USER CODE BEGIN PD */
 #define SLEEP_TIMEOUT_MS 30000
 #define LED_PWM_MAX 249  //matches TIM2 Period (ARR)
+
+//Beat shape. "Lub" is the smaller first thump, "dub" the stronger second thump,
+//separated by a short gap, followed by a longer rest before the next heartbeat.
+#define LUB_RAMP_MS 40
+#define GAP_MS      80
+#define DUB_RAMP_MS 80
+
+//RTC wakeup timer ticks per millisecond. RTCCLK is LSI (32 kHz, LSI_VALUE in
+//stm32u0xx_hal_conf.h) and RTC_WAKEUPCLOCK_RTCCLK_DIV16 divides it by 16, giving
+//2000 Hz - one tick per 0.5 ms. The 16-bit counter therefore spans 32.7 s, well
+//over our 2000 ms longest sleep. This path bypasses the RTC prescalers entirely,
+//so the calendar's 32768-vs-32000 mismatch does not apply.
+#define RTC_WUT_TICKS_PER_MS 2u
+
+//Shortest idle worth taking Stop 2 for. Below this the clock restart and the
+//RTC arm/disarm cost more than the sleep saves, so plain WFI wins.
+#define STOP_MIN_MS 20u
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -61,11 +78,18 @@ typedef enum {
 
 /* Private variables ---------------------------------------------------------*/
 
+RTC_HandleTypeDef hrtc;
+
 SPI_HandleTypeDef hspi1;
 
 TIM_HandleTypeDef htim2;
 
 /* USER CODE BEGIN PV */
+
+/* Beat state machine position. File scope rather than static-local to led_tick()
+   so the idle scheduler can ask how long the current phase has left to run. */
+static BeatPhase_t beat_phase = BEAT_LUB_RAMP_UP;
+static uint32_t beat_phase_start_tick = 0;
 
 /* USER CODE END PV */
 
@@ -74,11 +98,16 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_RTC_Init(void);
 /* USER CODE BEGIN PFP */
 uint8_t calculate_movement_score(int8_t acceleration_data[256][3]);
-void go_to_sleep(SleepMode_t mode); 
+void go_to_sleep(SleepMode_t mode);
 void auto_sleep_tick(uint8_t movement_score);
 void led_tick(uint8_t movement_score);
+static uint32_t beat_rest_ms(uint8_t movement_score);
+static uint32_t led_ms_until_next_update(uint8_t movement_score);
+static uint8_t led_phase_just_entered_rest(void);
+static void sleep_stop2_ms(uint32_t ms);
 
 /* USER CODE END PFP */
 
@@ -118,7 +147,15 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   MX_TIM2_Init();
+  MX_RTC_Init();
   /* USER CODE BEGIN 2 */
+  //Wake from Stop straight onto HSI16. The AHB prescaler (/4) is kept in RCC_CFGR
+  //across Stop, so this lands back on HCLK = 4 MHz with flash latency 0 still
+  //correct - identical to the running config, and no clock reconfiguration is
+  //needed on each wake. Waking onto MSI instead would change HCLK and silently
+  //shift every timing constant.
+  __HAL_RCC_WAKEUPSTOP_CLK_CONFIG(RCC_STOP_WAKEUPCLOCK_HSI);
+
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_4);
 
   //If accelerometer init fails, flash light and then go to sleep forever
@@ -149,20 +186,45 @@ int main(void)
     static uint8_t FIFO_unread_length = 0;
     static uint8_t movement_score = 0;
 
-    if (HAL_GPIO_ReadPin(INT2_GPIO_Port, INT2_Pin) == 1){
-      __NOP();
-      if (LIS2DW12_read_FIFO(&hspi1, &FIFO_unread_length, acceleration_data) == 0){
-        movement_score = calculate_movement_score(acceleration_data);
-        __NOP();
+    led_tick(movement_score);
+
+    //Service the accelerometer once per beat, at the moment the beat enters its
+    //rest phase. The read costs roughly 10ms (three HAL_Delay(1) inside the driver,
+    //a ~150 byte burst at 250 kbit/s, then the 256-sample score), which disappears
+    //inside a 150-2000ms rest but would visibly stutter a 40ms ramp.
+    //
+    //Deferring the read like this is also what makes sleeping safe: INT2 is left as
+    //a polled input rather than a wake source, so every sleep runs for exactly the
+    //duration we asked for and the SysTick correction in sleep_stop2_ms() is exact.
+    //The cost is that motion starting mid-rest is not noticed until the next beat,
+    //up to ~2.2s at the slowest rate.
+    if (led_phase_just_entered_rest()){
+
+      if (HAL_GPIO_ReadPin(INT2_GPIO_Port, INT2_Pin) == 1){
+        if (LIS2DW12_read_FIFO(&hspi1, &FIFO_unread_length, acceleration_data) == 0){
+          movement_score = calculate_movement_score(acceleration_data);
+        }
+        else {
+          //Error reading FIFO
+          __NOP();
+        }
       }
-      else {
-        //Error reading FIFO
-        __NOP();
-      }
+
+      //Only reacts to movement_score, which now only changes here.
+      auto_sleep_tick(movement_score);
     }
 
-    auto_sleep_tick(movement_score);
-    led_tick(movement_score);
+    //Idle out whatever is left before the PWM must next move. The long static
+    //stretches (gap and rest) are worth stopping the CPU for; during the ramps the
+    //duty changes every tick, so just gate the core clock until the next SysTick.
+    uint32_t idle_ms = led_ms_until_next_update(movement_score);
+
+    if (idle_ms >= STOP_MIN_MS){
+      sleep_stop2_ms(idle_ms);
+    }
+    else {
+      HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
+    }
 
     /* USER CODE END WHILE */
 
@@ -187,9 +249,10 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI|RCC_OSCILLATORTYPE_LSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -208,6 +271,56 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief RTC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_RTC_Init(void)
+{
+
+  /* USER CODE BEGIN RTC_Init 0 */
+
+  /* USER CODE END RTC_Init 0 */
+
+  /* USER CODE BEGIN RTC_Init 1 */
+
+  /* USER CODE END RTC_Init 1 */
+
+  /** Initialize RTC Only
+  */
+  hrtc.Instance = RTC;
+  hrtc.Init.HourFormat = RTC_HOURFORMAT_24;
+  hrtc.Init.AsynchPrediv = 127;
+  hrtc.Init.SynchPrediv = 255;
+  hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
+  hrtc.Init.OutPutRemap = RTC_OUTPUT_REMAP_NONE;
+  hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
+  hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
+  hrtc.Init.OutPutPullUp = RTC_OUTPUT_PULLUP_NONE;
+  hrtc.Init.BinMode = RTC_BINARY_NONE;
+  if (HAL_RTC_Init(&hrtc) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Enable the WakeUp
+  */
+  if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, 0, RTC_WAKEUPCLOCK_RTCCLK_DIV16, 0) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN RTC_Init 2 */
+  /* CubeMX arms the wakeup timer above with a reload of 0, which at RTCCLK/16
+     retriggers every 0.5ms forever. We drive the timer per-sleep from
+     sleep_stop2_ms() instead, so shut it down until the first sleep asks for it.
+     Kept here rather than deleting the generated call, which would come back on
+     the next regeneration. */
+  HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
+  /* USER CODE END RTC_Init 2 */
+
 }
 
 /**
@@ -432,29 +545,87 @@ static void configure_shutdown_pin_pulls(void){
   HAL_PWREx_EnablePullUpPullDownConfig();
 }
 
+/* Wait for the accelerometer's INT1 to be quiet before arming WKUP3.
+   PWR_WAKEUP_PIN3_HIGH is level-triggered, so arming it while INT1 is still
+   asserted sets WUF3 immediately and Shutdown exits the moment it is entered -
+   clearing the flag first does not help, because the level re-sets it. That is
+   exactly the ~650ms false-sleep: the wake engine was still chewing through the
+   filter transient left by configure_sleep's ODR/FS change, INT1 was high, and the
+   board woke and reset instead of sleeping.
+
+   The settle delay in configure_sleep gets most of the way there; this closes the
+   gap adaptively rather than relying on that delay being exactly long enough.
+   INT1 is pulsed (CTRL3.LIR = 0), so re-reading the source registers each pass
+   drops anything latched while we wait.
+
+   Returns 1 if INT1 settled low, 0 if it was still asserted at the timeout. */
+#define INT1_QUIET_TIMEOUT_MS 3000
+#define INT1_QUIET_HOLD_MS    100
+
+static uint8_t wait_for_int1_quiet(void){
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    /* Read-only peek at the wake pin. No pull: INT1 is a push-pull output on the
+       sensor side, so a pull could only fight it. */
+    GPIO_InitStruct.Pin = INT1_Pin;
+    GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    HAL_GPIO_Init(INT1_GPIO_Port, &GPIO_InitStruct);
+
+    uint32_t start = HAL_GetTick();
+    uint32_t quiet_since = start;
+
+    while ((HAL_GetTick() - start) < INT1_QUIET_TIMEOUT_MS){
+
+        if (HAL_GPIO_ReadPin(INT1_GPIO_Port, INT1_Pin) == GPIO_PIN_SET){
+            /* Still firing. Clear the latched source and restart the hold window. */
+            LIS2DW12_clear_interrupt_sources(&hspi1);
+            quiet_since = HAL_GetTick();
+        }
+        else if ((HAL_GetTick() - quiet_since) >= INT1_QUIET_HOLD_MS){
+            /* Low, and stayed low long enough that it is not between pulses. */
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 void go_to_sleep(SleepMode_t mode){
     switch (mode) {
         case SLEEP_MODE_DEEP:
             /* PA1 = WKUP3, wired to the accelerometer's INT1. Movement drives it high,
-               so wake on a rising edge. Clear any stale wake flag before enabling,
+               so wake on a high level. Clear any stale wake flag before enabling,
                otherwise a flag left set from a previous event wakes us immediately. */
 
-            if(!LIS2DW12_configure_sleep(&hspi1)){
+            if(!LIS2DW12_configure_sleep(&hspi1) && wait_for_int1_quiet()){
               configure_shutdown_pin_pulls();
               __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF3);
               HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN3_HIGH);
               HAL_PWR_EnterSHUTDOWNMode();
             }
             else{
-              /* Configuring the accelerometer for wake-up failed. Don't enter
-                 Shutdown - with no armed wake source the board would never wake. */
-              __NOP();
+              /* Either configuring the accelerometer for wake-up failed, or INT1 never
+                 went quiet. Don't enter Shutdown: with no usable wake source the board
+                 would never wake, and arming against a stuck-high INT1 just burns a
+                 wake-reset cycle. The caller backs off and retries later.
+
+                 configure_sleep has already left the sensor in its sleep config by this
+                 point - 1.6 Hz, FIFO bypassed, INT2 unrouted - so movement_score would
+                 be stuck at 0 and the board would be deaf to motion until it managed to
+                 sleep. Re-init to put it back to work in the meantime. */
+              LIS2DW12_init(&hspi1);
             }
 
             break;
 
         case SLEEP_MODE_DEEP_FORCE:
+          /* Forced path: used when the sensor has already failed init, so there may be
+             no working wake source at all. Sleep regardless - a board that never wakes
+             is the intended outcome here, and is far better than one left flashing. */
           LIS2DW12_configure_sleep(&hspi1);
+          wait_for_int1_quiet();
           configure_shutdown_pin_pulls();
           __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF3);
           HAL_PWR_EnableWakeUpPin(PWR_WAKEUP_PIN3_HIGH);
@@ -483,7 +654,16 @@ void auto_sleep_tick(uint8_t movement_score){
     }
     
     else if ((HAL_GetTick() - zero_score_start_tick) >= SLEEP_TIMEOUT_MS){
+
       go_to_sleep(SLEEP_MODE_DEEP);
+
+      /* Still running, so Shutdown was not entered. Restart the timer to back off
+         for another SLEEP_TIMEOUT_MS. Without this the elapsed check stays true and
+         go_to_sleep is retried on every beat - and since a failed attempt leaves the
+         sensor in its sleep config (FIFO bypassed, INT2 unrouted), movement_score can
+         never climb back off zero to break the cycle. That would stall the beat for
+         the full settle time, every beat, indefinitely. */
+      zero_score_start_tick = HAL_GetTick();
     }
   }
   else {
@@ -491,66 +671,61 @@ void auto_sleep_tick(uint8_t movement_score){
   }
 }
 
+//Rest period shortens as movement increases, mimicking a rising heart rate.
+//Score 0 -> 2000ms rest, score 100 -> 150ms rest.
+static uint32_t beat_rest_ms(uint8_t movement_score){
+    return 2000 - ((uint32_t)movement_score * 1850) / 100;
+}
+
 void led_tick(uint8_t movement_score){
 
-    static BeatPhase_t phase = BEAT_LUB_RAMP_UP;
-    static uint32_t phase_start_tick = 0;
     uint32_t now = HAL_GetTick();
-    uint32_t elapsed = now - phase_start_tick;
-
-    //"Lub" is the smaller first thump, "dub" the stronger second thump, separated by a
-    //short gap, followed by a longer rest before the next heartbeat.
-    const uint32_t lub_ramp_ms = 40;
-    const uint32_t gap_ms      = 80;
-    const uint32_t dub_ramp_ms = 80;
-
-    //Rest period shortens as movement increases, mimicking a rising heart rate.
-    //Score 0 -> 2000ms rest, score 100 -> 150ms rest.
-    uint32_t rest_ms = 2000 - ((uint32_t)movement_score * 1850) / 100;
+    uint32_t elapsed = now - beat_phase_start_tick;
+    uint32_t rest_ms = beat_rest_ms(movement_score);
 
     uint32_t duty = 0;
 
-    switch (phase){
+    switch (beat_phase){
         case BEAT_LUB_RAMP_UP:
-            duty = (elapsed * (LED_PWM_MAX / 2)) / lub_ramp_ms;
-            if (elapsed >= lub_ramp_ms){
-                phase = BEAT_LUB_RAMP_DOWN;
-                phase_start_tick = now;
+            duty = (elapsed * (LED_PWM_MAX / 2)) / LUB_RAMP_MS;
+            if (elapsed >= LUB_RAMP_MS){
+                beat_phase = BEAT_LUB_RAMP_DOWN;
+                beat_phase_start_tick = now;
                 duty = LED_PWM_MAX / 2;
             }
             break;
 
         case BEAT_LUB_RAMP_DOWN:
-            duty = (LED_PWM_MAX / 2) - (elapsed * (LED_PWM_MAX / 2)) / lub_ramp_ms;
-            if (elapsed >= lub_ramp_ms){
-                phase = BEAT_GAP;
-                phase_start_tick = now;
+            duty = (LED_PWM_MAX / 2) - (elapsed * (LED_PWM_MAX / 2)) / LUB_RAMP_MS;
+            if (elapsed >= LUB_RAMP_MS){
+                beat_phase = BEAT_GAP;
+                beat_phase_start_tick = now;
                 duty = 0;
             }
             break;
 
         case BEAT_GAP:
             duty = 0;
-            if (elapsed >= gap_ms){
-                phase = BEAT_DUB_RAMP_UP;
-                phase_start_tick = now;
+            if (elapsed >= GAP_MS){
+                beat_phase = BEAT_DUB_RAMP_UP;
+                beat_phase_start_tick = now;
             }
             break;
 
         case BEAT_DUB_RAMP_UP:
-            duty = (elapsed * LED_PWM_MAX) / dub_ramp_ms;
-            if (elapsed >= dub_ramp_ms){
-                phase = BEAT_DUB_RAMP_DOWN;
-                phase_start_tick = now;
+            duty = (elapsed * LED_PWM_MAX) / DUB_RAMP_MS;
+            if (elapsed >= DUB_RAMP_MS){
+                beat_phase = BEAT_DUB_RAMP_DOWN;
+                beat_phase_start_tick = now;
                 duty = LED_PWM_MAX;
             }
             break;
 
         case BEAT_DUB_RAMP_DOWN:
-            duty = LED_PWM_MAX - (elapsed * LED_PWM_MAX) / dub_ramp_ms;
-            if (elapsed >= dub_ramp_ms){
-                phase = BEAT_REST;
-                phase_start_tick = now;
+            duty = LED_PWM_MAX - (elapsed * LED_PWM_MAX) / DUB_RAMP_MS;
+            if (elapsed >= DUB_RAMP_MS){
+                beat_phase = BEAT_REST;
+                beat_phase_start_tick = now;
                 duty = 0;
             }
             break;
@@ -559,8 +734,8 @@ void led_tick(uint8_t movement_score){
         default:
             duty = 0;
             if (elapsed >= rest_ms){
-                phase = BEAT_LUB_RAMP_UP;
-                phase_start_tick = now;
+                beat_phase = BEAT_LUB_RAMP_UP;
+                beat_phase_start_tick = now;
             }
             break;
     }
@@ -568,6 +743,82 @@ void led_tick(uint8_t movement_score){
     if (duty > LED_PWM_MAX) duty = LED_PWM_MAX; //clamp against rounding overshoot at phase boundaries
 
     __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_4, duty);
+}
+
+
+//How long until led_tick() next has to change the PWM duty. During the ramps the
+//duty moves every millisecond, so there is nothing to skip; during the gap and
+//rest the output is static and the CPU can be stopped for the remainder.
+//Call only after led_tick(), so the phase and elapsed time are current.
+static uint32_t led_ms_until_next_update(uint8_t movement_score){
+
+    uint32_t elapsed = HAL_GetTick() - beat_phase_start_tick;
+    uint32_t phase_ms;
+
+    switch (beat_phase){
+        case BEAT_GAP:
+            phase_ms = GAP_MS;
+            break;
+
+        case BEAT_REST:
+            phase_ms = beat_rest_ms(movement_score);
+            break;
+
+        default:
+            //Ramping: duty changes on every tick.
+            return 1;
+    }
+
+    //led_tick() only advances the phase once elapsed has reached the phase length,
+    //so sleeping the whole remainder lands us on the transition rather than past it.
+    return (elapsed >= phase_ms) ? 0 : (phase_ms - elapsed);
+}
+
+
+//True on the single iteration that led_tick() moved the beat into its rest phase.
+//That transition is the one point in the cycle with a long stretch of static
+//output ahead, which is where the accelerometer read is cheapest to hide.
+static uint8_t led_phase_just_entered_rest(void){
+
+    static BeatPhase_t previous_phase = BEAT_LUB_RAMP_UP;
+
+    uint8_t entered = (beat_phase == BEAT_REST) && (previous_phase != BEAT_REST);
+    previous_phase = beat_phase;
+
+    return entered;
+}
+
+
+//Stop the CPU for ms milliseconds, woken by the RTC wakeup timer.
+//
+//SysTick is not clocked in Stop 2, so HAL_GetTick() would otherwise lose the whole
+//sleep and every timebase built on it (the beat state machine, the 30s inactivity
+//timer, the driver's SPI timeouts) would stall. Because the caller chooses the
+//duration and the accelerometer is deliberately not a wake source, the elapsed
+//time is known exactly and uwTick can simply be advanced by it.
+static void sleep_stop2_ms(uint32_t ms){
+
+    uint32_t ticks = ms * RTC_WUT_TICKS_PER_MS;
+
+    if (ticks == 0u){
+        return;
+    }
+
+    /* The counter reload is zero-based: a value of n wakes after n+1 ticks. */
+    if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, ticks - 1u,
+                                    RTC_WAKEUPCLOCK_RTCCLK_DIV16, 0u) != HAL_OK){
+        /* Without an armed wake source Stop would never end, so stay awake and
+           let the caller's normal timing carry on. */
+        return;
+    }
+
+    HAL_SuspendTick();
+    HAL_PWREx_EnterSTOP2Mode(PWR_STOPENTRY_WFI);
+    HAL_ResumeTick();
+
+    HAL_RTCEx_DeactivateWakeUpTimer(&hrtc);
+
+    uwTick += ms;
 }
 
 

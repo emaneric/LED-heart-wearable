@@ -66,6 +66,13 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 
+/* Accelerometer INT1 -> PA1, which is also PWR_WKUP3 and the only Shutdown wake
+   source. CubeMX does not emit GPIO config for it because WKUP3 is a PWR signal
+   rather than a GPIO one, so the pin is left at its reset state; go_to_sleep()
+   configures it as an input when it needs to read the level before arming. */
+#define INT1_Pin GPIO_PIN_1
+#define INT1_GPIO_Port GPIOA
+
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

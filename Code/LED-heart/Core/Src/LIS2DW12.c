@@ -11,6 +11,10 @@
 
 #define LIS2DW12_WHO_AM_I_VALUE 0x44
 
+//Filter settle time after the ODR/FS change in configure_sleep, in ms.
+//Must span several ODR periods at the sleep ODR (1.6 Hz -> 625 ms per sample).
+#define LIS2DW12_SLEEP_SETTLE_MS 2000
+
 typedef enum {
     LIS2DW12_REG_WHO_AM_I       = 0x0F,
     LIS2DW12_REG_CTRL1          = 0x20,
@@ -26,6 +30,7 @@ typedef enum {
     LIS2DW12_REG_WAKE_UP_THS    = 0x34,
     LIS2DW12_REG_WAKE_UP_DUR    = 0x35,
     LIS2DW12_REG_WAKE_UP_SRC    = 0x38,
+    LIS2DW12_REG_ALL_INT_SRC    = 0x3B,
     LIS2DW12_REG_CTRL7          = 0x3F,
 } LIS2DW12_RegAddr_t;
 
@@ -272,10 +277,17 @@ uint8_t LIS2DW12_init(SPI_HandleTypeDef *hspi){
     status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL2, CTRL2_reg.raw);
     HAL_Delay(1);
 
-    //25 Hz, high-performance mode (14-bit)
-    CTRL1_reg.field.ODR = 0b0011;  //25 Hz
-    CTRL1_reg.field.MODE = 0b01;   //high-performance
-    CTRL1_reg.field.LP_MODE = 0b00;
+    //12.5 Hz, low-power mode 2 (14-bit).
+    //High-performance mode draws ~90uA regardless of ODR, which dwarfs everything the
+    //MCU saves by sleeping between beats; low-power mode 2 at 12.5 Hz is ~1.6uA. The
+    //cost is noise density rising from 110 to 300 ug/sqrt(Hz), which does not matter
+    //here because the movement score is built from sample-to-sample deltas averaged
+    //over 255 pairs, so uncorrelated noise averages out.
+    //12.5 Hz also makes the 32-slot FIFO span 2.56s, comfortably longer than the 2.24s
+    //worst-case gap between reads at movement score 0, so no samples are dropped.
+    CTRL1_reg.field.ODR = 0b0010;  //12.5 Hz
+    CTRL1_reg.field.MODE = 0b00;   //low-power
+    CTRL1_reg.field.LP_MODE = 0b01;//low-power mode 2 (14-bit)
     status = LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL1, CTRL1_reg.raw);
     HAL_Delay(1);
 
@@ -288,8 +300,10 @@ uint8_t LIS2DW12_init(SPI_HandleTypeDef *hspi){
     HAL_Delay(1);
 
     //FIFO continuous mode with a 25-sample watermark.
-    //The 32-slot FIFO stores one 14-bit XYZ set per sample. At 25 Hz the
-    //watermark is reached every ~1 second. Mode and threshold share FIFO_CTRL.
+    //The 32-slot FIFO stores one 14-bit XYZ set per sample. At 12.5 Hz the
+    //watermark is reached every ~2 seconds and the FIFO only fills at 2.56s, so
+    //there is margin against the slowest read cadence. Mode and threshold share
+    //FIFO_CTRL.
     FIFO_CTRL_reg.field.FMode = 0b110;  //continuous
     FIFO_CTRL_reg.field.FTH = 25;
     status = LIS2DW12_write_register(hspi, LIS2DW12_REG_FIFO_CTRL, FIFO_CTRL_reg.raw);
@@ -405,9 +419,15 @@ uint8_t LIS2DW12_configure_sleep(SPI_HandleTypeDef *hspi){
 
     //Changing ODR/FS resets the internal filter the wake-up engine reads from.
     //Give it time to settle before arming the threshold, otherwise the settling transient
-    //itself reads as a false wake-up event on a stationary device. A few ODR periods at
-    //1.6 Hz is ~seconds; 600 ms covers it with margin.
-    HAL_Delay(600);
+    //itself reads as a false wake-up event on a stationary device.
+    //
+    //This has to be counted in ODR periods, and 1.6 Hz is a 625 ms period - the previous
+    //600 ms here was less than a single sample, so the transient was still in flight when
+    //the threshold was armed. INT1 then came up immediately, and because WKUP3 is
+    //level-triggered the MCU woke straight back out of Shutdown. 2000 ms is 3.2 periods.
+    //The caller still confirms INT1 is actually low before arming the wake pin, so this
+    //delay no longer has to be exactly right - it just has to get most of the way there.
+    HAL_Delay(LIS2DW12_SLEEP_SETTLE_MS);
 
     //Wake-up threshold. 1 LSB = FS/(2^6) = 2000mg/64 ~= 31mg.
     //WK_THS = 4 -> ~125mg. Tune to taste. No sleep/inactivity engine needed:
@@ -440,6 +460,27 @@ uint8_t LIS2DW12_configure_sleep(SPI_HandleTypeDef *hspi){
     CTRL7_reg.field.INTERRUPTS_ENABLE = 1;
     error |= (LIS2DW12_write_register(hspi, LIS2DW12_REG_CTRL7, CTRL7_reg.raw) != HAL_OK);
     HAL_Delay(1);
+
+    //Arming the engine can itself latch an event from the last of the settling
+    //transient. Drop anything pending so the caller starts from a clean pad.
+    error |= LIS2DW12_clear_interrupt_sources(hspi);
+
+    return error;
+}
+
+
+//Reset every interrupt flag currently routed to the INT pads. Per the datasheet
+//(section 8.31) reading ALL_INT_SRC clears them all simultaneously; WAKE_UP_SRC is
+//read afterwards so the wake-up detail bits are available for debugging and so the
+//two shadows agree with the device.
+//Returns 0 on success.
+uint8_t LIS2DW12_clear_interrupt_sources(SPI_HandleTypeDef *hspi){
+
+    uint8_t all_int_src = 0;
+    uint8_t error = 0;
+
+    error |= (LIS2DW12_read_register(hspi, LIS2DW12_REG_ALL_INT_SRC, &all_int_src) != HAL_OK);
+    error |= (LIS2DW12_read_register(hspi, LIS2DW12_REG_WAKE_UP_SRC, &WAKE_UP_SRC_reg.raw) != HAL_OK);
 
     return error;
 }
